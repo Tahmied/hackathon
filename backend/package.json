@@ -1,27 +1,47 @@
 {
+  "name": "novatrade-backend",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "src/server.ts",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "tsx src/server.ts",
+    "typecheck": "tsc --noEmit",
+    "seed": "tsx src/database/seed.ts",
+    "format": "prettier --write \"src/**/*.ts\""
+  },
+  "author": "tahmied",
+  "license": "ISC",
+  "description": "NovaTrade — simulated trading platform backend",
   "dependencies": {
-    "axios": "^1.13.5",
     "bcryptjs": "^3.0.3",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
+    "express-rate-limit": "^8.2.1",
+    "helmet": "^8.1.0",
+    "ioredis": "^5.8.2",
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^9.6.2",
+    "multer": "^2.0.2",
+    "nodemailer": "^7.0.10",
+    "pino": "^10.1.0",
+    "pino-pretty": "^13.1.2",
+    "socket.io": "^4.8.1",
+    "tesseract.js": "^7.0.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "nodemon": "^3.1.11",
-    "prettier": "^3.8.1"
-  },
-  "name": "anychat-support",
-  "version": "1.0.0",
-  "main": "src/server.js",
-  "type": "module",
-  "scripts": {
-    "dev": "nodemon src/server.js"
-  },
-  "author": "tahmied",
-  "license": "ISC",
-  "description": ""
+    "@types/cookie-parser": "^1.4.10",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.5",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/multer": "^2.0.0",
+    "@types/node": "^24",
+    "@types/nodemailer": "^7.0.4",
+    "prettier": "^3.8.1",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  }
 }
