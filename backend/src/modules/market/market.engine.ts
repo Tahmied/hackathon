@@ -13,6 +13,7 @@ interface SymbolState {
   basePrice: number;
   volatility: number;
   driftReversion: number;
+  volMultiplier: number; // slowly-varying volatility clustering (0.55 – 1.9)
 }
 
 const INTERVAL_MS: Record<string, number> = {
@@ -22,7 +23,10 @@ const INTERVAL_MS: Record<string, number> = {
 };
 
 const states = new Map<string, SymbolState>();
-const liveCandles = new Map<string, { open: number; high: number; low: number; close: number; ticks: number }>();
+const liveCandles = new Map<
+  string,
+  { open: number; high: number; low: number; close: number; volume: number; ticks: number }
+>();
 
 let tickTimer: NodeJS.Timeout | null = null;
 let watchdogTimer: NodeJS.Timeout | null = null;
@@ -40,7 +44,7 @@ function candleKey(symbol: string, interval: string, openTime: number) {
   return `${symbol}|${interval}|${openTime}`;
 }
 
-function updateCandles(symbol: string, price: number) {
+function updateCandles(symbol: string, price: number, tickVolume: number) {
   const now = Date.now();
   for (const interval of Object.keys(INTERVAL_MS)) {
     const openTime = floorToInterval(now, interval);
@@ -59,12 +63,13 @@ function updateCandles(symbol: string, price: number) {
     const key = candleKey(symbol, interval, openTime);
     let c = liveCandles.get(key);
     if (!c) {
-      c = { open: price, high: price, low: price, close: price, ticks: 0 };
+      c = { open: price, high: price, low: price, close: price, volume: 0, ticks: 0 };
       liveCandles.set(key, c);
     }
     c.high = Math.max(c.high, price);
     c.low = Math.min(c.low, price);
     c.close = price;
+    c.volume += tickVolume;
     c.ticks += 1;
   }
 }
@@ -73,12 +78,12 @@ async function persistCandle(
   symbol: string,
   interval: string,
   openTime: number,
-  c: { open: number; high: number; low: number; close: number; ticks: number },
+  c: { open: number; high: number; low: number; close: number; volume: number; ticks: number },
 ) {
   try {
     await Candle.updateOne(
       { symbol, interval, openTime: new Date(openTime) },
-      { $set: { open: c.open, high: c.high, low: c.low, close: c.close, ticks: c.ticks } },
+      { $set: { open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume, ticks: c.ticks } },
       { upsert: true },
     );
   } catch {
@@ -106,10 +111,11 @@ async function persistAggregates(symbol: string, interval: string) {
       const close = minutes[minutes.length - 1]!.close;
       const high = Math.max(...minutes.map((m) => m.high));
       const low = Math.min(...minutes.map((m) => m.low));
+      const volume = minutes.reduce((s, m) => s + (m.volume ?? 0), 0);
       try {
         await Candle.updateOne(
           { symbol, interval, openTime: from },
-          { $set: { open, high, low, close, ticks: minutes.length } },
+          { $set: { open, high, low, close, volume, ticks: minutes.length } },
           { upsert: true },
         );
       } catch {
@@ -123,10 +129,20 @@ function randomWalk(state: SymbolState): number {
   const u1 = Math.random();
   const u2 = Math.random();
   const z = Math.sqrt(-2 * Math.log(u1 + 1e-12)) * Math.cos(2 * Math.PI * u2);
-  const shock = z * state.volatility;
+  const shock = z * state.volatility * state.volMultiplier;
   const reversion = (state.basePrice - state.price) / state.basePrice * state.driftReversion;
   const next = state.price * (1 + shock + reversion);
   return Math.max(next, state.basePrice * 0.2);
+}
+
+/** Slow-moving volatility multiplier: quiet and active regimes (GARCH-ish feel). */
+function driftVolatility(state: SymbolState) {
+  state.volMultiplier = Math.min(1.9, Math.max(0.55, state.volMultiplier + (Math.random() - 0.5) * 0.015));
+}
+
+function tickVolumeFor(state: SymbolState, movePct: number): number {
+  const relativeMove = movePct / (state.volatility * state.volMultiplier + 1e-12);
+  return 0.6 + Math.random() * 0.9 + relativeMove * relativeMove * 0.12;
 }
 
 function tick() {
@@ -135,8 +151,11 @@ function tick() {
   const now = Date.now();
 
   for (const state of states.values()) {
+    driftVolatility(state);
+    const prev = state.price;
     state.price = randomWalk(state);
-    updateCandles(state.symbol, state.price);
+    const movePct = Math.abs(state.price - prev) / (prev || 1);
+    updateCandles(state.symbol, state.price, tickVolumeFor(state, movePct));
   }
   lastTickAt = now;
 
@@ -154,7 +173,19 @@ function tick() {
 export async function backfillHistory(days = 7) {
   for (const asset of await Asset.find({ isActive: true })) {
     const existing = await Candle.countDocuments({ symbol: asset.symbol, interval: '1m' });
-    if (existing > 100) continue;
+    if (existing > 100) {
+      // Legacy candles (pre-volume, old volatility) — regenerate once
+      const withVolume = await Candle.countDocuments({
+        symbol: asset.symbol,
+        interval: '1m',
+        volume: { $gt: 0 },
+      });
+      if (withVolume < existing * 0.5) {
+        await Candle.deleteMany({ symbol: asset.symbol });
+      } else {
+        continue;
+      }
+    }
 
     logger.info({ symbol: asset.symbol }, 'backfilling market history');
     let price = asset.basePrice * (1 - asset.volatility * 50);
@@ -168,6 +199,7 @@ export async function backfillHistory(days = 7) {
       high: number;
       low: number;
       close: number;
+      volume: number;
       ticks: number;
     }[] = [];
     const start = floorToInterval(Date.now() - total * stepMs, '1m');
@@ -176,8 +208,9 @@ export async function backfillHistory(days = 7) {
         symbol: asset.symbol,
         price,
         basePrice: asset.basePrice,
-        volatility: asset.volatility * 3,
+        volatility: asset.volatility,
         driftReversion: asset.driftReversion,
+        volMultiplier: 0.6 + Math.random() * 0.9,
       };
       const open = price;
       let high = open;
@@ -189,6 +222,7 @@ export async function backfillHistory(days = 7) {
         low = Math.min(low, price);
       }
       const openTime = new Date(start + i * stepMs);
+      const minuteMove = Math.abs(price - open) / (open || 1);
       docs.push({
         symbol: asset.symbol,
         interval: '1m',
@@ -197,6 +231,7 @@ export async function backfillHistory(days = 7) {
         high,
         low,
         close: price,
+        volume: Math.round(20 + Math.random() * 60 + minuteMove * 8000),
         ticks: 6,
       });
     }
@@ -227,6 +262,7 @@ async function buildAggregatesFromMinutes(symbol: string, interval: string) {
     close: arr[arr.length - 1]!.close,
     high: Math.max(...arr.map((a) => a.high)),
     low: Math.min(...arr.map((a) => a.low)),
+    volume: arr.reduce((s, a) => s + (a.volume ?? 0), 0),
     ticks: arr.length,
   }));
   for (let i = 0; i < docs.length; i += 500) {
@@ -234,15 +270,32 @@ async function buildAggregatesFromMinutes(symbol: string, interval: string) {
   }
 }
 
+/** Realistic per-tick volatilities (~1s ticks) — BTC 1m candles move ≈0.1%. */
+const VOLATILITY_OVERRIDES: Record<string, number> = {
+  'BTC/USD': 0.00035,
+  'ETH/USD': 0.00045,
+  'SOL/USD': 0.0007,
+  'XAU/USD': 0.00015,
+  'EUR/BDT': 0.00012,
+  'USD/BDT': 0.00008,
+};
+
 export async function startMarketEngine() {
   const assets: AssetDoc[] = await Asset.find({ isActive: true });
   for (const a of assets) {
+    // auto-migrate older seeds to realistic dynamics
+    const realistic = VOLATILITY_OVERRIDES[a.symbol];
+    if (realistic && Math.abs(a.volatility - realistic) > 1e-9) {
+      a.volatility = realistic;
+      await Asset.updateOne({ _id: a._id }, { $set: { volatility: realistic } }).catch(() => undefined);
+    }
     states.set(a.symbol, {
       symbol: a.symbol,
       price: a.lastPrice || a.basePrice,
       basePrice: a.basePrice,
       volatility: a.volatility,
       driftReversion: a.driftReversion,
+      volMultiplier: 0.7 + Math.random() * 0.6,
     });
   }
   startedAt = Date.now();

@@ -198,7 +198,7 @@ export default function DepositsPage() {
 
       {/* Review dialog */}
       <Dialog open={!!selected} onOpenChange={(open) => !open && setSelected(null)}>
-        <DialogContent className="max-w-3xl">
+        <DialogContent className="flex h-[94vh] max-w-6xl flex-col overflow-hidden">
           <DialogHeader>
             <DialogTitle>Deposit review</DialogTitle>
             <DialogDescription>
@@ -209,6 +209,7 @@ export default function DepositsPage() {
             </DialogDescription>
           </DialogHeader>
 
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
           <div className="grid gap-4 sm:grid-cols-2">
             {/* Claimed form */}
             <div className="space-y-2 rounded-lg border border-border p-4">
@@ -319,14 +320,18 @@ export default function DepositsPage() {
             )}
           </div>
 
+          </div>
+
+          <div className="shrink-0">
           <Textarea
             value={note}
             onChange={(e) => setNote(e.target.value)}
             placeholder="Review note (mandatory for reject / request-info)…"
             rows={2}
           />
+          </div>
 
-          <DialogFooter className="gap-2">
+          <DialogFooter className="shrink-0 gap-2 pt-3 border-t border-border">
             {canRequestInfo && (
               <Button variant="outline" onClick={() => void act('request-info')} disabled={acting}>
                 <MessageSquareWarning className="mr-1 h-4 w-4" /> Request info

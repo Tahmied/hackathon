@@ -9,6 +9,7 @@ export interface CandleDoc {
   high: number;
   low: number;
   close: number;
+  volume: number;
   ticks: number;
 }
 
@@ -21,6 +22,7 @@ const CandleSchema = new Schema<CandleDoc>(
     high: { type: Number, required: true },
     low: { type: Number, required: true },
     close: { type: Number, required: true },
+    volume: { type: Number, default: 0 },
     ticks: { type: Number, default: 1 },
   },
   { timestamps: { createdAt: true, updatedAt: false } },

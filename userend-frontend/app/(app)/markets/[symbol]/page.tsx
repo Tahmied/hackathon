@@ -58,6 +58,25 @@ export default function AssetDetailPage({ params }: { params: Promise<{ symbol: 
     refetchInterval: 20000,
   });
 
+  // 96 × 15m candles ≈ 24h window for the daily change badge
+  const dailyCandles = useQuery({
+    queryKey: ['candles', symbol, 'daily-change'],
+    queryFn: async () =>
+      (
+        await api.get('/market/candles', {
+          params: { symbol, interval: '15m', limit: 96 },
+        })
+      ).data.data.candles as CandleView[],
+    refetchInterval: 60000,
+  });
+  const dailyChange =
+    dailyCandles.data && dailyCandles.data.length > 1
+      ? ((dailyCandles.data[dailyCandles.data.length - 1]!.close -
+          dailyCandles.data[0]!.close) /
+          dailyCandles.data[0]!.close) *
+        100
+      : null;
+
   const wallet = useQuery({
     queryKey: ['wallets'],
     queryFn: async () => (await api.get('/wallets')).data.data as WalletsOverview,
@@ -157,7 +176,19 @@ export default function AssetDetailPage({ params }: { params: Promise<{ symbol: 
                   <Badge variant="outline">{asset.data.name}</Badge>
                 )}
               </div>
-              <p className="font-mono text-3xl font-bold tabular-nums">{formatPrice(livePrice)}</p>
+              <div className="flex items-baseline gap-3">
+                <p className="font-mono text-3xl font-bold tabular-nums">{formatPrice(livePrice)}</p>
+                {dailyChange !== null && (
+                  <span
+                    className={cn(
+                      'text-sm font-semibold',
+                      dailyChange >= 0 ? 'text-profit' : 'text-loss',
+                    )}
+                  >
+                    {dailyChange >= 0 ? '▲' : '▼'} {Math.abs(dailyChange).toFixed(2)}% 24h
+                  </span>
+                )}
+              </div>
             </div>
             <div className="flex gap-1 rounded-lg border border-border bg-card p-1">
               {(['1m', '5m', '15m'] as Interval[]).map((i) => (
